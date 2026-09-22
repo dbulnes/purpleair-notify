@@ -168,6 +168,25 @@ describe('checkAqi', () => {
     expect(result.isOverThreshold).toBe(true);
     expect(core.setFailed).not.toHaveBeenCalled();
   });
+
+  it('triggers core.setFailed when over threshold and prevStatus is failure if forceAlert is true', async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      data: {
+        sensor: {
+          sensor_index: 12345,
+          name: 'Front Yard',
+          location_type: 0,
+          'pm2.5': 75.0,
+        },
+      },
+    });
+
+    const result = await checkAqi('12345', 'failure', 'test-api-key', true);
+    expect(result.isOverThreshold).toBe(true);
+    expect(core.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('Over 60 threshold!')
+    );
+  });
 });
 
 describe('getLastBuildStatus', () => {

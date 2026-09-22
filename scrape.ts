@@ -91,7 +91,8 @@ export interface CheckAqiResult {
 export async function checkAqi(
   sensorId: string,
   prevStatus: string,
-  apiKey?: string
+  apiKey?: string,
+  forceAlert?: boolean
 ): Promise<CheckAqiResult> {
   const key = apiKey || process.env.PURPLEAIR_API_KEY || process.env.PURPLEAIR_READ_KEY;
   if (!key) {
@@ -132,7 +133,8 @@ export async function checkAqi(
 
   console.log(message);
 
-  if (isOverThreshold && prevStatus !== 'failure') {
+  const shouldAlert = isOverThreshold && (prevStatus !== 'failure' || forceAlert);
+  if (shouldAlert) {
     core.setFailed(message);
   }
 
@@ -182,6 +184,8 @@ export async function writeJobSummary(results: CheckAqiResult[]): Promise<void> 
 
 export async function scrape(): Promise<void> {
   const sensorIdsStr = process.env.SENSOR_IDS || '19189,62565';
+  const forceAlert = process.env.FORCE_ALERT === 'true' || process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+
   const sensorIds = sensorIdsStr
     .split(',')
     .map((s) => s.trim())
@@ -194,6 +198,9 @@ export async function scrape(): Promise<void> {
 
   const prevStatus = await getLastBuildStatus();
   console.log(`Previous GitHub Actions build conclusion: ${prevStatus}`);
+  if (forceAlert && prevStatus === 'failure') {
+    console.log('Force alert enabled (manual workflow run or FORCE_ALERT=true): alerting regardless of previous failure.');
+  }
 
   let anyFailed = false;
   const failureMessages: string[] = [];
@@ -201,9 +208,9 @@ export async function scrape(): Promise<void> {
 
   for (const sensorId of sensorIds) {
     try {
-      const result = await checkAqi(sensorId, prevStatus);
+      const result = await checkAqi(sensorId, prevStatus, undefined, forceAlert);
       results.push(result);
-      if (result.isOverThreshold && prevStatus !== 'failure') {
+      if (result.isOverThreshold && (prevStatus !== 'failure' || forceAlert)) {
         anyFailed = true;
         failureMessages.push(result.message);
       }
