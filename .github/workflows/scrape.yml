@@ -1,31 +1,63 @@
 name: PurpleAir Check
+
 on:
   schedule:
-           # ┌───────────── minute (0 - 59)
-           # │  ┌───────────── hour (0 - 23)
-           # │  │ ┌───────────── day of the month (1 - 31)
-           # │  │ │ ┌───────────── month (1 - 12)
-           # │  │ │ │ ┌───────────── day of the week (0 - 6) (Sun to Sat)
-           # │  │ │ │ │
-           # *  * * * *
+    # Runs twice an hour at :17 and :47
     - cron: '17,47 * * * *'
   push:
     branches:
       - master
+      - main
+  workflow_dispatch:
+    inputs:
+      sensor_ids:
+        description: 'PurpleAir Sensor ID(s) (comma-separated, optional override)'
+        required: false
+        type: string
+      outside_threshold:
+        description: 'Outdoor PM2.5 threshold override (optional, default: 60)'
+        required: false
+        type: string
+      inside_threshold:
+        description: 'Indoor PM2.5 threshold override (optional, default: 30)'
+        required: false
+        type: string
+
+# Minimum required permissions
+permissions:
+  contents: read
+  actions: read
+
+# Avoid overlapping workflow runs
+concurrency:
+  group: scrape-purpleair
+  cancel-in-progress: false
+
 jobs:
   scrape:
     name: Check AQI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Setup Node.js
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v7
         with:
-          node-version: 14
+          node-version: 20
+          cache: 'npm'
+
       - name: Install dependencies
-        run: npm install
-      - name: Run script
+        run: npm ci
+
+      - name: Run AQI check
         run: npm run scrape
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_PAT: ${{ secrets.GH_PAT }}
+          PURPLEAIR_API_KEY: ${{ secrets.PURPLEAIR_API_KEY }}
+          SENSOR_IDS: ${{ inputs.sensor_ids || secrets.SENSOR_IDS }}
+          OUTSIDE_THRESHOLD: ${{ inputs.outside_threshold || secrets.OUTSIDE_THRESHOLD }}
+          INSIDE_THRESHOLD: ${{ inputs.inside_threshold || secrets.INSIDE_THRESHOLD }}

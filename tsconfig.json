@@ -1,20 +1,18 @@
 {
   "compilerOptions": {
-    "moduleResolution": "node",
-    "target": "esnext",
+    "target": "ES2022",
     "module": "commonjs",
-    "lib": ["dom", "esnext"],
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
     "strict": true,
     "sourceMap": true,
     "declaration": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
     "declarationDir": "./dist",
     "outDir": "./dist",
-    "typeRoots": ["node_modules/@types", "@types"]
+    "skipLibCheck": true
   },
   "include": ["scrape.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
