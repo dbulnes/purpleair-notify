@@ -256,8 +256,6 @@ export function buildNotificationEmail(
     '',
     ...textRows.flatMap((row) => [row, '']),
     `Checked: ${checkedAtText}`,
-    '',
-    'This email contains the complete alert; you do not need to open GitHub.',
   ].join('\n');
 
   const tableRows = results.map((result) => {
@@ -298,7 +296,6 @@ export function buildNotificationEmail(
         </div>
         <div style="padding:20px 28px 28px;color:#667085;font-size:13px;line-height:1.5">
           <div>Checked: ${escapeHtml(checkedAtText)}</div>
-          <div>This message contains the complete alert; no GitHub sign-in is needed.</div>
         </div>
       </div>
     </div>

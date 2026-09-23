@@ -252,8 +252,9 @@ describe('email notifications', () => {
     expect(email.subject).toContain('Front <Porch>: 75 µg/m³');
     expect(email.text).toContain('PM2.5: 75 µg/m³');
     expect(email.text).toContain('Threshold: 60 µg/m³');
-    expect(email.text).toContain('do not need to open GitHub');
+    expect(email.text).not.toContain('GitHub');
     expect(email.html).toContain('Front &lt;Porch&gt;');
+    expect(email.html).not.toContain('GitHub sign-in');
     expect(email.html).not.toContain('Front <Porch>');
   });
 
