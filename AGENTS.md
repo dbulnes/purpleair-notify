@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project Overview
-`purpleair-notify` is a lightweight, serverless air-quality alert system. It runs on a scheduled GitHub Actions cron job, querying the PurpleAir API v1 for real-time PM2.5 sensor readings. If particulate levels exceed configured thresholds (e.g., AQI enters "unhealthy" levels), it fails the GitHub Action run to trigger a native notification email to the repository watcher/owner, with built-in deduplication so emails are not spammed during extended high-pollution events.
+`purpleair-notify` is a lightweight, serverless air-quality alert system. It runs on a scheduled GitHub Actions cron job, querying the PurpleAir API v1 for real-time PM2.5 sensor readings. If particulate levels exceed configured thresholds, it sends a complete alert email through the Resend API. The workflow remains failed while pollution stays elevated, using that conclusion as a durable deduplication marker, and sends a recovery email when every sensor returns below its threshold.
 
 ### Tech Stack
 - **Runtime:** Node.js `>= 20`
@@ -80,21 +80,23 @@ PURPLEAIR_API_KEY="your-read-api-key" SENSOR_IDS="19189" npm run scrape
 - `250.5+`: Hazardous (AQI 301+)
 
 ### 4. Alert Deduplication Mechanism
-- The script queries the GitHub Actions REST API (`/repos/${repo}/actions/runs`) to find the latest completed run's conclusion.
-- If the current PM2.5 reading exceeds the threshold:
-  - If `prevStatus !== 'failure'`, `core.setFailed(...)` is invoked and the process terminates with an error. This prompts GitHub to send an alert email.
-  - If `prevStatus === 'failure'`, the status is logged, but `core.setFailed(...)` is **skipped**. This avoids repetitive alert emails while air quality stays elevated.
+- The script queries the workflow-specific GitHub Actions REST API (`/repos/${repo}/actions/workflows/scrape.yml/runs`) to find the latest completed scrape run's conclusion.
+- When any sensor first crosses its threshold, the script sends one Resend alert email and fails the workflow.
+- Every subsequent run remains failed while any sensor is over threshold, but no repeat alert is sent.
+- When all sensors recover, the script sends one recovery email and allows the workflow to succeed, resetting the state for the next event.
+- Manual workflow runs force a new alert when readings are high. The `send_test_email` input sends a status email regardless of the current readings.
 
 ---
 
 ## Coding Conventions & Guardrails
 
 1. **Module Isolation:**
-   - `scrape.ts` exports all core helper functions (`getAqiLabel`, `parseLocationType`, `getThreshold`, `getLastBuildStatus`, `checkAqi`, `scrape`).
+   - `scrape.ts` exports all core helper functions, including AQI parsing, notification selection and rendering, Resend delivery, status lookup, and `scrape`.
    - Execution is guarded by `if (require.main === module)` to prevent side-effects during test imports.
 
 2. **Error Handling:**
    - Missing `PURPLEAIR_API_KEY` must fail with an explicit, helpful instruction directing the user to `https://develop.purpleair.com`.
+   - A requested email must fail clearly if `RESEND_API_KEY` or `ALERT_EMAIL` is missing.
    - External network failures on build status lookup must fail gracefully with warnings rather than aborting the AQI check.
 
 3. **Boundaries & Guardrails:**

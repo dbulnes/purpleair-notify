@@ -22,6 +22,11 @@ on:
         description: 'Indoor PM2.5 threshold override (optional, default: 30)'
         required: false
         type: string
+      send_test_email:
+        description: 'Send a test email containing the current readings'
+        required: false
+        type: boolean
+        default: false
 
 # Minimum required permissions
 permissions:
@@ -61,3 +66,8 @@ jobs:
           SENSOR_IDS: ${{ inputs.sensor_ids || secrets.SENSOR_IDS }}
           OUTSIDE_THRESHOLD: ${{ inputs.outside_threshold || secrets.OUTSIDE_THRESHOLD }}
           INSIDE_THRESHOLD: ${{ inputs.inside_threshold || secrets.INSIDE_THRESHOLD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          ALERT_FROM_EMAIL: ${{ vars.ALERT_FROM_EMAIL }}
+          ALERT_TIME_ZONE: ${{ vars.ALERT_TIME_ZONE }}
+          SEND_TEST_EMAIL: ${{ inputs.send_test_email }}

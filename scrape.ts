@@ -11,6 +11,14 @@ export type AQIRange = {
   label: string;
 };
 
+export type NotificationKind = 'alert' | 'recovery' | 'test';
+
+export interface NotificationEmail {
+  subject: string;
+  text: string;
+  html: string;
+}
+
 export const AQI_TABLE: AQIRange[] = [
   { cutoff: 12, label: 'good' }, // AQI 0-50
   { cutoff: 35.4, label: 'moderate' }, // AQI 51-100
@@ -49,10 +57,11 @@ export function getThreshold(sensorType: 'outside' | 'inside'): number {
 
 export async function getLastBuildStatus(
   repo: string = process.env.GITHUB_REPOSITORY || 'dbulnes/purpleair-notify',
-  token: string | undefined = process.env.GITHUB_TOKEN || process.env.GH_PAT
+  token: string | undefined = process.env.GITHUB_TOKEN || process.env.GH_PAT,
+  workflowFile: string = 'scrape.yml'
 ): Promise<string> {
   try {
-    const url = `https://api.github.com/repos/${repo}/actions/runs`;
+    const url = `https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/runs?per_page=10`;
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github.v3+json',
       'User-Agent': 'purpleair-notify',
@@ -90,9 +99,7 @@ export interface CheckAqiResult {
 
 export async function checkAqi(
   sensorId: string,
-  prevStatus: string,
-  apiKey?: string,
-  forceAlert?: boolean
+  apiKey?: string
 ): Promise<CheckAqiResult> {
   const key = apiKey || process.env.PURPLEAIR_API_KEY || process.env.PURPLEAIR_READ_KEY;
   if (!key) {
@@ -133,11 +140,6 @@ export async function checkAqi(
 
   console.log(message);
 
-  const shouldAlert = isOverThreshold && (prevStatus !== 'failure' || forceAlert);
-  if (shouldAlert) {
-    core.setFailed(message);
-  }
-
   return {
     sensorId,
     sensorName,
@@ -148,6 +150,207 @@ export async function checkAqi(
     isOverThreshold,
     message,
   };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function formatCheckedAt(checkedAt: Date): string {
+  const configuredTimeZone = process.env.ALERT_TIME_ZONE || 'UTC';
+
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: configuredTimeZone,
+      timeZoneName: 'short',
+    }).format(checkedAt);
+  } catch {
+    console.warn(`Invalid ALERT_TIME_ZONE "${configuredTimeZone}"; using UTC.`);
+    return new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: 'UTC',
+      timeZoneName: 'short',
+    }).format(checkedAt);
+  }
+}
+
+export function getNotificationKind(
+  results: CheckAqiResult[],
+  prevStatus: string,
+  forceAlert: boolean,
+  sendTestEmail: boolean
+): NotificationKind | null {
+  if (sendTestEmail) return 'test';
+
+  const anyOverThreshold = results.some((result) => result.isOverThreshold);
+  if (anyOverThreshold && (prevStatus !== 'failure' || forceAlert)) return 'alert';
+  if (!anyOverThreshold && prevStatus === 'failure') return 'recovery';
+  return null;
+}
+
+export function buildNotificationEmail(
+  kind: NotificationKind,
+  results: CheckAqiResult[],
+  checkedAt: Date = new Date()
+): NotificationEmail {
+  const overThreshold = results.filter((result) => result.isOverThreshold);
+  const highestReading = [...results].sort((a, b) => b.pm25 - a.pm25)[0];
+
+  let subject: string;
+  let heading: string;
+  let intro: string;
+  let accentColor: string;
+
+  if (kind === 'alert') {
+    if (overThreshold.length === 1) {
+      const sensor = overThreshold[0];
+      subject = `⚠️ Unhealthy air — ${sensor.sensorName}: ${sensor.pm25} µg/m³`;
+    } else {
+      subject = `⚠️ Air quality alert — ${overThreshold.length} sensors over threshold`;
+    }
+    heading = 'Air quality alert';
+    intro = `${overThreshold.length} sensor${overThreshold.length === 1 ? ' is' : 's are'} over the configured PM2.5 threshold.`;
+    accentColor = '#b42318';
+  } else if (kind === 'recovery') {
+    subject = '✅ Air quality recovered — all sensors below threshold';
+    heading = 'Air quality has recovered';
+    intro = 'All monitored sensors are now below their configured PM2.5 thresholds.';
+    accentColor = '#067647';
+  } else {
+    subject = highestReading
+      ? `🧪 PurpleAir email test — ${results.length} sensor${results.length === 1 ? '' : 's'} checked`
+      : '🧪 PurpleAir email test';
+    heading = 'PurpleAir email test';
+    intro = 'Email delivery is configured correctly. The latest sensor readings are shown below.';
+    accentColor = '#175cd3';
+  }
+
+  const checkedAtText = formatCheckedAt(checkedAt);
+  const textRows = results.map((result) => [
+    `${result.sensorName} (${result.sensorId})`,
+    `  Location: ${result.sensorType}`,
+    `  PM2.5: ${result.pm25} µg/m³`,
+    `  Threshold: ${result.threshold} µg/m³`,
+    `  Air quality: ${result.aqiLabel}`,
+    `  Status: ${result.isOverThreshold ? 'OVER THRESHOLD' : 'Below threshold'}`,
+  ].join('\n'));
+
+  const text = [
+    heading,
+    '',
+    intro,
+    '',
+    ...textRows.flatMap((row) => [row, '']),
+    `Checked: ${checkedAtText}`,
+    '',
+    'This email contains the complete alert; you do not need to open GitHub.',
+  ].join('\n');
+
+  const tableRows = results.map((result) => {
+    const statusColor = result.isOverThreshold ? '#b42318' : '#067647';
+    const statusText = result.isOverThreshold ? '⚠️ Over threshold' : '✅ Below threshold';
+    return `
+      <tr>
+        <td style="padding:12px;border-bottom:1px solid #eaecf0"><strong>${escapeHtml(result.sensorName)}</strong><br><span style="color:#667085">${escapeHtml(result.sensorId)} · ${escapeHtml(result.sensorType)}</span></td>
+        <td style="padding:12px;border-bottom:1px solid #eaecf0">${result.pm25} µg/m³</td>
+        <td style="padding:12px;border-bottom:1px solid #eaecf0">${result.threshold} µg/m³</td>
+        <td style="padding:12px;border-bottom:1px solid #eaecf0;text-transform:capitalize">${escapeHtml(result.aqiLabel)}</td>
+        <td style="padding:12px;border-bottom:1px solid #eaecf0;color:${statusColor};font-weight:600">${statusText}</td>
+      </tr>`;
+  }).join('');
+
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#f2f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#101828">
+    <div style="max-width:720px;margin:0 auto;padding:32px 16px">
+      <div style="background:#ffffff;border:1px solid #eaecf0;border-top:6px solid ${accentColor};border-radius:12px;overflow:hidden">
+        <div style="padding:28px 28px 20px">
+          <h1 style="margin:0 0 12px;font-size:28px;line-height:1.2">${escapeHtml(heading)}</h1>
+          <p style="margin:0;color:#475467;font-size:16px;line-height:1.5">${escapeHtml(intro)}</p>
+        </div>
+        <div style="overflow-x:auto">
+          <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px">
+            <thead style="background:#f9fafb;text-align:left">
+              <tr>
+                <th style="padding:10px 12px">Sensor</th>
+                <th style="padding:10px 12px">PM2.5</th>
+                <th style="padding:10px 12px">Threshold</th>
+                <th style="padding:10px 12px">Air quality</th>
+                <th style="padding:10px 12px">Status</th>
+              </tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+        <div style="padding:20px 28px 28px;color:#667085;font-size:13px;line-height:1.5">
+          <div>Checked: ${escapeHtml(checkedAtText)}</div>
+          <div>This message contains the complete alert; no GitHub sign-in is needed.</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+  return { subject, text, html };
+}
+
+export async function sendNotificationEmail(
+  kind: NotificationKind,
+  results: CheckAqiResult[],
+  checkedAt: Date = new Date()
+): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const recipients = (process.env.ALERT_EMAIL || '')
+    .split(',')
+    .map((email) => email.trim())
+    .filter(Boolean);
+
+  if (!apiKey || recipients.length === 0) {
+    throw new Error(
+      'Email notification requested, but RESEND_API_KEY or ALERT_EMAIL is missing. ' +
+      'Add both as GitHub Actions repository secrets.'
+    );
+  }
+
+  const from = process.env.ALERT_FROM_EMAIL || 'PurpleAir Notify <onboarding@resend.dev>';
+  const email = buildNotificationEmail(kind, results, checkedAt);
+  const runId = process.env.GITHUB_RUN_ID || checkedAt.getTime().toString();
+
+  await axios.post(
+    'https://api.resend.com/emails',
+    {
+      from,
+      to: recipients,
+      subject: email.subject,
+      text: email.text,
+      html: email.html,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `purpleair-notify/${kind}/${runId}`,
+        'User-Agent': 'purpleair-notify',
+      },
+      timeout: 15000,
+    }
+  );
+
+  console.log(`${kind[0].toUpperCase()}${kind.slice(1)} email sent to ${recipients.join(', ')}.`);
 }
 
 export async function writeJobSummary(results: CheckAqiResult[]): Promise<void> {
@@ -185,6 +388,7 @@ export async function writeJobSummary(results: CheckAqiResult[]): Promise<void> 
 export async function scrape(): Promise<void> {
   const sensorIdsStr = process.env.SENSOR_IDS || '19189,62565';
   const forceAlert = process.env.FORCE_ALERT === 'true' || process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+  const sendTestEmail = process.env.SEND_TEST_EMAIL === 'true';
 
   const sensorIds = sensorIdsStr
     .split(',')
@@ -202,18 +406,12 @@ export async function scrape(): Promise<void> {
     console.log('Force alert enabled (manual workflow run or FORCE_ALERT=true): alerting regardless of previous failure.');
   }
 
-  let anyFailed = false;
-  const failureMessages: string[] = [];
   const results: CheckAqiResult[] = [];
 
   for (const sensorId of sensorIds) {
     try {
-      const result = await checkAqi(sensorId, prevStatus, undefined, forceAlert);
+      const result = await checkAqi(sensorId);
       results.push(result);
-      if (result.isOverThreshold && (prevStatus !== 'failure' || forceAlert)) {
-        anyFailed = true;
-        failureMessages.push(result.message);
-      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.error(`Error checking sensor ${sensorId}: ${msg}`);
@@ -224,7 +422,16 @@ export async function scrape(): Promise<void> {
 
   await writeJobSummary(results);
 
-  if (anyFailed) {
+  const notificationKind = getNotificationKind(results, prevStatus, forceAlert, sendTestEmail);
+  if (notificationKind) {
+    await sendNotificationEmail(notificationKind, results);
+  }
+
+  const failedResults = results.filter((result) => result.isOverThreshold);
+  if (failedResults.length > 0) {
+    // Every unhealthy run must remain failed. The previous run's conclusion is the
+    // durable alert-state marker that suppresses repeat emails until recovery.
+    const failureMessages = failedResults.map((result) => result.message);
     throw new Error(`Unhealthy air quality detected:\n${failureMessages.join('\n')}`);
   }
 }

@@ -7,7 +7,11 @@ import {
   getThreshold,
   getLastBuildStatus,
   checkAqi,
+  getNotificationKind,
+  buildNotificationEmail,
+  sendNotificationEmail,
   writeJobSummary,
+  scrape,
   CheckAqiResult,
 } from './scrape';
 
@@ -102,7 +106,7 @@ describe('checkAqi', () => {
   it('throws an error if no API key is provided', async () => {
     delete process.env.PURPLEAIR_API_KEY;
     delete process.env.PURPLEAIR_READ_KEY;
-    await expect(checkAqi('12345', 'success')).rejects.toThrow(/Missing PurpleAir API key/);
+    await expect(checkAqi('12345')).rejects.toThrow(/Missing PurpleAir API key/);
   });
 
   it('fetches sensor data using PurpleAir v1 API with api key', async () => {
@@ -117,7 +121,7 @@ describe('checkAqi', () => {
       },
     });
 
-    const result = await checkAqi('12345', 'success', 'test-api-key');
+    const result = await checkAqi('12345', 'test-api-key');
     expect(axios.get).toHaveBeenCalledWith(
       expect.stringContaining('/v1/sensors/12345'),
       expect.objectContaining({
@@ -133,7 +137,7 @@ describe('checkAqi', () => {
     expect(core.setFailed).not.toHaveBeenCalled();
   });
 
-  it('triggers core.setFailed when over threshold and prevStatus is not failure', async () => {
+  it('returns an over-threshold result without deciding notification state', async () => {
     vi.mocked(axios.get).mockResolvedValueOnce({
       data: {
         sensor: {
@@ -145,47 +149,49 @@ describe('checkAqi', () => {
       },
     });
 
-    const result = await checkAqi('12345', 'success', 'test-api-key');
+    const result = await checkAqi('12345', 'test-api-key');
     expect(result.isOverThreshold).toBe(true);
-    expect(core.setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('Over 60 threshold!')
-    );
-  });
-
-  it('does NOT trigger core.setFailed when over threshold if prevStatus was already failure (prevents email spam)', async () => {
-    vi.mocked(axios.get).mockResolvedValueOnce({
-      data: {
-        sensor: {
-          sensor_index: 12345,
-          name: 'Front Yard',
-          location_type: 0,
-          'pm2.5': 75.0,
-        },
-      },
-    });
-
-    const result = await checkAqi('12345', 'failure', 'test-api-key');
-    expect(result.isOverThreshold).toBe(true);
+    expect(result.message).toContain('Over 60 threshold!');
     expect(core.setFailed).not.toHaveBeenCalled();
   });
+});
 
-  it('triggers core.setFailed when over threshold and prevStatus is failure if forceAlert is true', async () => {
-    vi.mocked(axios.get).mockResolvedValueOnce({
-      data: {
-        sensor: {
-          sensor_index: 12345,
-          name: 'Front Yard',
-          location_type: 0,
-          'pm2.5': 75.0,
-        },
-      },
-    });
+const healthyResult: CheckAqiResult = {
+  sensorId: '123',
+  sensorName: 'Front Porch',
+  pm25: 12.5,
+  threshold: 60,
+  sensorType: 'outside',
+  aqiLabel: 'moderate',
+  isOverThreshold: false,
+  message: 'Air quality moderate...',
+};
 
-    const result = await checkAqi('12345', 'failure', 'test-api-key', true);
-    expect(result.isOverThreshold).toBe(true);
-    expect(core.setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('Over 60 threshold!')
-    );
+const unhealthyResult: CheckAqiResult = {
+  ...healthyResult,
+  pm25: 75,
+  aqiLabel: 'unhealthy',
+  isOverThreshold: true,
+  message: 'Air quality unhealthy...',
+};
+
+describe('getNotificationKind', () => {
+  it('sends one alert at the start of an unhealthy period', () => {
+    expect(getNotificationKind([unhealthyResult], 'success', false, false)).toBe('alert');
+    expect(getNotificationKind([unhealthyResult], 'failure', false, false)).toBeNull();
+  });
+
+  it('allows a forced alert for a manual run', () => {
+    expect(getNotificationKind([unhealthyResult], 'failure', true, false)).toBe('alert');
+  });
+
+  it('sends a recovery after an unhealthy period', () => {
+    expect(getNotificationKind([healthyResult], 'failure', false, false)).toBe('recovery');
+    expect(getNotificationKind([healthyResult], 'success', false, false)).toBeNull();
+  });
+
+  it('prioritizes an explicitly requested test email', () => {
+    expect(getNotificationKind([healthyResult], 'success', false, true)).toBe('test');
   });
 });
 
@@ -208,7 +214,7 @@ describe('getLastBuildStatus', () => {
     const status = await getLastBuildStatus('test/repo', 'dummy-token');
     expect(status).toBe('success');
     expect(axios.get).toHaveBeenCalledWith(
-      'https://api.github.com/repos/test/repo/actions/runs',
+      'https://api.github.com/repos/test/repo/actions/workflows/scrape.yml/runs?per_page=10',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer dummy-token',
@@ -221,6 +227,147 @@ describe('getLastBuildStatus', () => {
     vi.mocked(axios.get).mockRejectedValueOnce(new Error('Network error'));
     const status = await getLastBuildStatus('test/repo');
     expect(status).toBe('unknown');
+  });
+});
+
+describe('email notifications', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = { ...originalEnv, ALERT_TIME_ZONE: 'UTC' };
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('builds a complete alert email with no GitHub visit required', () => {
+    const email = buildNotificationEmail(
+      'alert',
+      [{ ...unhealthyResult, sensorName: 'Front <Porch>' }],
+      new Date('2026-09-22T23:17:00Z')
+    );
+
+    expect(email.subject).toContain('Front <Porch>: 75 µg/m³');
+    expect(email.text).toContain('PM2.5: 75 µg/m³');
+    expect(email.text).toContain('Threshold: 60 µg/m³');
+    expect(email.text).toContain('do not need to open GitHub');
+    expect(email.html).toContain('Front &lt;Porch&gt;');
+    expect(email.html).not.toContain('Front <Porch>');
+  });
+
+  it('builds a recovery email', () => {
+    const email = buildNotificationEmail('recovery', [healthyResult]);
+    expect(email.subject).toContain('Air quality recovered');
+    expect(email.text).toContain('All monitored sensors are now below');
+  });
+
+  it('sends through the Resend API with idempotency and multiple recipients', async () => {
+    process.env.RESEND_API_KEY = 're_test';
+    process.env.ALERT_EMAIL = 'one@example.com, two@example.com';
+    process.env.GITHUB_RUN_ID = '98765';
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: { id: 'email-id' } });
+
+    await sendNotificationEmail('test', [healthyResult], new Date('2026-09-22T23:17:00Z'));
+
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://api.resend.com/emails',
+      expect.objectContaining({
+        from: 'PurpleAir Notify <onboarding@resend.dev>',
+        to: ['one@example.com', 'two@example.com'],
+        subject: expect.stringContaining('PurpleAir email test'),
+        text: expect.stringContaining('PM2.5: 12.5 µg/m³'),
+        html: expect.stringContaining('Front Porch'),
+      }),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer re_test',
+          'Idempotency-Key': 'purpleair-notify/test/98765',
+        }),
+      })
+    );
+  });
+
+  it('fails clearly when email secrets are missing', async () => {
+    delete process.env.RESEND_API_KEY;
+    delete process.env.ALERT_EMAIL;
+
+    await expect(sendNotificationEmail('alert', [unhealthyResult])).rejects.toThrow(
+      /RESEND_API_KEY or ALERT_EMAIL is missing/
+    );
+  });
+});
+
+describe('scrape state transitions', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = {
+      ...originalEnv,
+      SENSOR_IDS: '123',
+      PURPLEAIR_API_KEY: 'purpleair-key',
+      GITHUB_REPOSITORY: 'test/repo',
+      GITHUB_TOKEN: 'github-token',
+      GITHUB_EVENT_NAME: 'schedule',
+      RESEND_API_KEY: 're_test',
+      ALERT_EMAIL: 'owner@example.com',
+    };
+    delete process.env.FORCE_ALERT;
+    delete process.env.SEND_TEST_EMAIL;
+    delete process.env.GITHUB_STEP_SUMMARY;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('keeps an unhealthy run failed without resending during the same event', async () => {
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({
+        data: { workflow_runs: [{ status: 'completed', conclusion: 'failure' }] },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          sensor: {
+            sensor_index: 123,
+            name: 'Front Porch',
+            location_type: 0,
+            'pm2.5': 75,
+          },
+        },
+      });
+
+    await expect(scrape()).rejects.toThrow(/Unhealthy air quality detected/);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('sends one recovery email and succeeds when readings return below threshold', async () => {
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({
+        data: { workflow_runs: [{ status: 'completed', conclusion: 'failure' }] },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          sensor: {
+            sensor_index: 123,
+            name: 'Front Porch',
+            location_type: 0,
+            'pm2.5': 10,
+          },
+        },
+      });
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: { id: 'recovery-email-id' } });
+
+    await expect(scrape()).resolves.toBeUndefined();
+    expect(axios.post).toHaveBeenCalledWith(
+      'https://api.resend.com/emails',
+      expect.objectContaining({
+        subject: expect.stringContaining('Air quality recovered'),
+      }),
+      expect.any(Object)
+    );
   });
 });
 
@@ -251,18 +398,7 @@ describe('writeJobSummary', () => {
     };
     (core as any).summary = mockSummary;
 
-    const sampleResults: CheckAqiResult[] = [
-      {
-        sensorId: '123',
-        sensorName: 'Front Porch',
-        pm25: 12.5,
-        threshold: 60,
-        sensorType: 'outside',
-        aqiLabel: 'moderate',
-        isOverThreshold: false,
-        message: 'Air quality moderate...',
-      },
-    ];
+    const sampleResults: CheckAqiResult[] = [healthyResult];
 
     await writeJobSummary(sampleResults);
     expect(mockSummary.addHeading).toHaveBeenCalledWith('PurpleAir AQI Report', 2);
