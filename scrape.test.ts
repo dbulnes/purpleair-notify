@@ -256,12 +256,18 @@ describe('email notifications', () => {
     expect(email.html).toContain('Front &lt;Porch&gt;');
     expect(email.html).not.toContain('GitHub sign-in');
     expect(email.html).not.toContain('Front <Porch>');
+    expect(email.html).toContain('purpleair notify');
+    expect(email.html).toContain('background:#060914');
+    expect(email.html).toContain('color:#f08ca5');
+    expect(email.html).toContain('color:#f27d88');
   });
 
   it('builds a recovery email', () => {
     const email = buildNotificationEmail('recovery', [healthyResult]);
     expect(email.subject).toContain('Air quality recovered');
     expect(email.text).toContain('All monitored sensors are now below');
+    expect(email.html).toContain('color:#72e1c2');
+    expect(email.html).toContain('Air quality recovered');
   });
 
   it('sends through the Resend API with idempotency and multiple recipients', async () => {

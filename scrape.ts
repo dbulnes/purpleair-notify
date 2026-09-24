@@ -214,6 +214,9 @@ export function buildNotificationEmail(
   let heading: string;
   let intro: string;
   let accentColor: string;
+  let accentBackground: string;
+  let accentBorder: string;
+  let statusLabel: string;
 
   if (kind === 'alert') {
     if (overThreshold.length === 1) {
@@ -224,19 +227,28 @@ export function buildNotificationEmail(
     }
     heading = 'Air quality alert';
     intro = `${overThreshold.length} sensor${overThreshold.length === 1 ? ' is' : 's are'} over the configured PM2.5 threshold.`;
-    accentColor = '#b42318';
+    accentColor = '#f08ca5';
+    accentBackground = '#321c28';
+    accentBorder = '#623246';
+    statusLabel = 'Threshold exceeded';
   } else if (kind === 'recovery') {
     subject = '✅ Air quality recovered — all sensors below threshold';
     heading = 'Air quality has recovered';
     intro = 'All monitored sensors are now below their configured PM2.5 thresholds.';
-    accentColor = '#067647';
+    accentColor = '#72e1c2';
+    accentBackground = '#17382c';
+    accentBorder = '#265d49';
+    statusLabel = 'Air quality recovered';
   } else {
     subject = highestReading
       ? `🧪 PurpleAir email test — ${results.length} sensor${results.length === 1 ? '' : 's'} checked`
       : '🧪 PurpleAir email test';
     heading = 'PurpleAir email test';
     intro = 'Email delivery is configured correctly. The latest sensor readings are shown below.';
-    accentColor = '#175cd3';
+    accentColor = '#70cfff';
+    accentBackground = '#152e3c';
+    accentBorder = '#28536a';
+    statusLabel = 'Delivery test';
   }
 
   const checkedAtText = formatCheckedAt(checkedAt);
@@ -258,47 +270,104 @@ export function buildNotificationEmail(
     `Checked: ${checkedAtText}`,
   ].join('\n');
 
-  const tableRows = results.map((result) => {
-    const statusColor = result.isOverThreshold ? '#b42318' : '#067647';
-    const statusText = result.isOverThreshold ? '⚠️ Over threshold' : '✅ Below threshold';
+  const sensorCards = results.map((result) => {
+    const statusColor = result.isOverThreshold ? '#f08ca5' : '#72e1c2';
+    const statusText = result.isOverThreshold ? 'Over threshold' : 'Below threshold';
+    const aqiPalette = result.aqiLabel === 'good'
+      ? { color: '#72e1c2', background: '#17382c', border: '#265d49' }
+      : result.aqiLabel === 'moderate'
+      ? { color: '#e8d174', background: '#38351a', border: '#5d5726' }
+      : result.aqiLabel === 'unhealthy for sensitive groups'
+      ? { color: '#f0a85d', background: '#3d2c17', border: '#6b4c24' }
+      : result.aqiLabel === 'unhealthy'
+      ? { color: '#f27d88', background: '#3f1f24', border: '#6e2f39' }
+      : result.aqiLabel === 'very unhealthy'
+      ? { color: '#c88df2', background: '#321c38', border: '#572d63' }
+      : { color: '#e26388', background: '#32111c', border: '#5d1b31' };
+
     return `
-      <tr>
-        <td style="padding:12px;border-bottom:1px solid #eaecf0"><strong>${escapeHtml(result.sensorName)}</strong><br><span style="color:#667085">${escapeHtml(result.sensorId)} · ${escapeHtml(result.sensorType)}</span></td>
-        <td style="padding:12px;border-bottom:1px solid #eaecf0">${result.pm25} µg/m³</td>
-        <td style="padding:12px;border-bottom:1px solid #eaecf0">${result.threshold} µg/m³</td>
-        <td style="padding:12px;border-bottom:1px solid #eaecf0;text-transform:capitalize">${escapeHtml(result.aqiLabel)}</td>
-        <td style="padding:12px;border-bottom:1px solid #eaecf0;color:${statusColor};font-weight:600">${statusText}</td>
-      </tr>`;
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin:0 0 12px;border:1px solid #263448;border-radius:14px;border-collapse:separate;background:#0a1220">
+        <tr>
+          <td class="sensor-card" style="padding:21px 22px">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse">
+              <tr>
+                <td style="padding:0 12px 0 0;vertical-align:top">
+                  <div style="color:#edf1f8;font-size:16px;font-weight:600;line-height:1.35">${escapeHtml(result.sensorName)}</div>
+                  <div style="margin-top:5px;color:#71829d;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:1px">${escapeHtml(result.sensorId)} &nbsp;·&nbsp; ${escapeHtml(result.sensorType)}</div>
+                </td>
+                <td align="right" style="padding:0;vertical-align:top">
+                  <span style="display:inline-block;padding:5px 9px;border:1px solid ${aqiPalette.border};border-radius:999px;background:${aqiPalette.background};color:${aqiPalette.color};font-size:10px;font-weight:700;line-height:1.2;letter-spacing:.3px;text-transform:uppercase;white-space:nowrap">${escapeHtml(result.aqiLabel)}</span>
+                </td>
+              </tr>
+            </table>
+            <div class="reading" style="margin:19px 0 18px;color:${aqiPalette.color};font-size:42px;font-weight:450;line-height:1;letter-spacing:-1.8px;font-variant-numeric:tabular-nums">
+              ${result.pm25}<span style="margin-left:7px;color:#92a2b7;font-size:14px;font-weight:400;letter-spacing:0;white-space:nowrap">µg/m³</span>
+            </div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border-top:1px solid #263448">
+              <tr>
+                <td style="padding:14px 10px 0 0;color:#8fa0b7;font-size:11px;line-height:1.5">Threshold&nbsp; <strong style="color:#d7dfec;font-weight:600">${result.threshold} µg/m³</strong></td>
+                <td align="right" style="padding:14px 0 0 10px;color:${statusColor};font-size:11px;font-weight:700;line-height:1.5;white-space:nowrap"><span style="font-size:13px">●</span>&nbsp; ${statusText}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>`;
   }).join('');
 
   const html = `<!doctype html>
 <html lang="en">
-  <body style="margin:0;background:#f2f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#101828">
-    <div style="max-width:720px;margin:0 auto;padding:32px 16px">
-      <div style="background:#ffffff;border:1px solid #eaecf0;border-top:6px solid ${accentColor};border-radius:12px;overflow:hidden">
-        <div style="padding:28px 28px 20px">
-          <h1 style="margin:0 0 12px;font-size:28px;line-height:1.2">${escapeHtml(heading)}</h1>
-          <p style="margin:0;color:#475467;font-size:16px;line-height:1.5">${escapeHtml(intro)}</p>
-        </div>
-        <div style="overflow-x:auto">
-          <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px">
-            <thead style="background:#f9fafb;text-align:left">
-              <tr>
-                <th style="padding:10px 12px">Sensor</th>
-                <th style="padding:10px 12px">PM2.5</th>
-                <th style="padding:10px 12px">Threshold</th>
-                <th style="padding:10px 12px">Air quality</th>
-                <th style="padding:10px 12px">Status</th>
-              </tr>
-            </thead>
-            <tbody>${tableRows}</tbody>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="supported-color-schemes" content="dark">
+    <style>
+      @media only screen and (max-width:600px) {
+        .email-shell { padding:20px 10px !important; }
+        .main-card { border-radius:16px !important; }
+        .header { padding:26px 20px 22px !important; }
+        .sensors { padding:0 12px 10px !important; }
+        .sensor-card { padding:18px 16px !important; }
+        .reading { font-size:36px !important; }
+        .footer { padding:18px 20px 24px !important; }
+      }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#060914;color:#f2f5fb;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(intro)}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#060914">
+      <tr>
+        <td class="email-shell" align="center" style="padding:36px 16px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:680px;border-collapse:collapse">
+            <tr>
+              <td style="padding:0 4px 24px">
+                <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+                  <tr>
+                    <td style="width:38px;height:38px;border:1px solid #9f8ff1;border-radius:12px;background:#765fd4;color:#ffffff;font-size:24px;font-weight:600;line-height:38px;text-align:center;vertical-align:middle">≈</td>
+                    <td style="padding-left:11px;color:#f7f7ff;font-size:22px;font-weight:650;line-height:1;letter-spacing:-.7px">purpleair notify<span style="color:#c1b7ff">.</span></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td class="main-card" style="overflow:hidden;border:1px solid #2b3646;border-radius:20px;background:#0d1423;box-shadow:0 22px 55px rgba(0,0,0,.24)">
+                <div style="height:3px;background:${accentColor};font-size:0;line-height:0">&nbsp;</div>
+                <div class="header" style="padding:32px 30px 27px">
+                  <span style="display:inline-block;padding:6px 10px;border:1px solid ${accentBorder};border-radius:999px;background:${accentBackground};color:${accentColor};font-size:10px;font-weight:700;line-height:1;letter-spacing:1.2px;text-transform:uppercase">${escapeHtml(statusLabel)}</span>
+                  <h1 style="margin:19px 0 10px;color:#f5f6fb;font-size:34px;font-weight:560;line-height:1.15;letter-spacing:-1.3px">${escapeHtml(heading)}</h1>
+                  <p style="max-width:540px;margin:0;color:#a5b2c8;font-size:15px;line-height:1.65">${escapeHtml(intro)}</p>
+                </div>
+                <div class="sensors" style="padding:0 20px 14px">${sensorCards}</div>
+                <div class="footer" style="padding:20px 30px 28px;border-top:1px solid #263448;color:#71829d;font-size:11px;line-height:1.6">
+                  <span style="color:#8f9db5;font-size:9px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase">Observatory reading</span>
+                  <div style="margin-top:7px;color:#a5b2c8">Checked ${escapeHtml(checkedAtText)}</div>
+                </div>
+              </td>
+            </tr>
           </table>
-        </div>
-        <div style="padding:20px 28px 28px;color:#667085;font-size:13px;line-height:1.5">
-          <div>Checked: ${escapeHtml(checkedAtText)}</div>
-        </div>
-      </div>
-    </div>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`;
 
