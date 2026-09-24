@@ -256,7 +256,9 @@ describe('email notifications', () => {
     expect(email.html).toContain('Front &lt;Porch&gt;');
     expect(email.html).not.toContain('GitHub sign-in');
     expect(email.html).not.toContain('Front <Porch>');
-    expect(email.html).toContain('purpleair notify');
+    expect(email.html).not.toContain('purpleair notify');
+    expect(email.html).not.toContain('background:#765fd4');
+    expect(email.html).toContain('>≈</span>');
     expect(email.html).toContain('background:#060914');
     expect(email.html).toContain('color:#f08ca5');
     expect(email.html).toContain('color:#f27d88');

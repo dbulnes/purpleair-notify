@@ -341,12 +341,7 @@ export function buildNotificationEmail(
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:680px;border-collapse:collapse">
             <tr>
               <td style="padding:0 4px 24px">
-                <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-                  <tr>
-                    <td style="width:38px;height:38px;border:1px solid #9f8ff1;border-radius:12px;background:#765fd4;color:#ffffff;font-size:24px;font-weight:600;line-height:38px;text-align:center;vertical-align:middle">≈</td>
-                    <td style="padding-left:11px;color:#f7f7ff;font-size:22px;font-weight:650;line-height:1;letter-spacing:-.7px">purpleair notify<span style="color:#c1b7ff">.</span></td>
-                  </tr>
-                </table>
+                <span style="color:#c1b7ff;font-size:30px;font-weight:700;line-height:1">≈</span>
               </td>
             </tr>
             <tr>
